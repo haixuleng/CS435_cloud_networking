@@ -19,6 +19,9 @@ int globalSocketUDP;
 //pre-filled for sending to 10.1.1.0 - 255, port 7777
 struct sockaddr_in globalNodeAddrs[256];
 
+// record neighbour nodes, 1 --> connected, 0 --> not connected
+int neighbour[256] = {0};
+
 void init_to_x(int* array, int s, int x){
     // initialize an array of size s to value x
     // return: none, update array

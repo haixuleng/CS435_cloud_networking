@@ -20,6 +20,8 @@ extern int globalSocketUDP;
 //pre-filled for sending to 10.1.1.0 - 255, port 7777
 extern struct sockaddr_in globalNodeAddrs[256];
 
+// an array that is used to record neighbours
+extern int neighbour[256];
 
 //Yes, this is terrible. It's also terrible that, in Linux, a socket
 //can't receive broadcast packets unless it's bound to INADDR_ANY,
@@ -43,6 +45,18 @@ void* announceToNeighbors(void* unusedParam)
 		hackyBroadcast("HEREIAM", 7);
 		nanosleep(&sleepFor, 0);
 	}
+}
+
+void printNeighbour(){
+	// print the neighbours
+	printf("Neighbour: ");
+	for(int i = 0; i < 256; i++){
+		if(neighbour[i]){
+			printf("%d", i);
+			printf(" ");
+		}
+	}
+	printf("\n");
 }
 
 void listenForNeighbors()
@@ -72,7 +86,8 @@ void listenForNeighbors()
 					strchr(strchr(strchr(fromAddr,'.')+1,'.')+1,'.')+1);
 			
 			//TODO: this node can consider heardFrom to be directly connected to it; do any such logic now.
-			
+			neighbour[heardFrom] = 1;
+			printNeighbour();
 			//record that we heard from heardFrom just now.
 			gettimeofday(&globalLastHeartbeat[heardFrom], 0);
 		}
@@ -93,7 +108,10 @@ void listenForNeighbors()
 		}
 		
 		//TODO now check for the various types of packets you use in your own protocol
-		//else if(!strncmp(recvBuf, "your other message types", ))
+		else if(!strncmp(recvBuf, "change", 6))
+		{
+			printf("Connection changed");
+		}
 		// ... 
 	}
 	//(should never reach here)
