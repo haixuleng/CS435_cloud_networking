@@ -59,8 +59,33 @@ void printNeighbour(){
 	printf("\n");
 }
 
+void announceChanges(){
+	// the neighbours of current node has changed
+	// need to announce this information to available neighbours
+	printf("Announce changes: not implemented yet");
+
+}
+
+void checkTimeOut(){
+	// check whether the neighbour has been lost
+	// time interval is 1 s
+	struct timeval current_time;
+	int timeout = 1000000;
+	gettimeofday(&current_time, NULL);
+	for(int i = 0; i < 256; i++){
+		int current_us = (current_time.tv_sec % 10) * 1000000 + current_time.tv_usec;
+		int last_connect_us = (globalLastHeartbeat[i].tv_sec % 10) * 1000000 + globalLastHeartbeat[i].tv_usec;
+		if(current_us - last_connect_us > timeout){
+			neighbour[i] = 0;
+			// also needs to broadcast this 
+			announceChanges();
+		}
+	}
+}
+
 void listenForNeighbors()
 {
+	printf("listen...\n");
 	char fromAddr[100];
 	struct sockaddr_in theirAddr;
 	socklen_t theirAddrLen;
@@ -86,7 +111,12 @@ void listenForNeighbors()
 					strchr(strchr(strchr(fromAddr,'.')+1,'.')+1,'.')+1);
 			
 			//TODO: this node can consider heardFrom to be directly connected to it; do any such logic now.
-			neighbour[heardFrom] = 1;
+			if(neighbour[heardFrom]){
+				// a newly connected neighbour
+				// record this neighbour, announce to others
+				neighbour[heardFrom] = 1;
+				announceChanges();
+			}
 			printNeighbour();
 			//record that we heard from heardFrom just now.
 			gettimeofday(&globalLastHeartbeat[heardFrom], 0);
@@ -112,6 +142,8 @@ void listenForNeighbors()
 		{
 			printf("Connection changed");
 		}
+
+		checkTimeOut();
 		// ... 
 	}
 	//(should never reach here)
