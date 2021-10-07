@@ -111,7 +111,7 @@ void listenForNeighbors()
 					strchr(strchr(strchr(fromAddr,'.')+1,'.')+1,'.')+1);
 			
 			//TODO: this node can consider heardFrom to be directly connected to it; do any such logic now.
-			if(neighbour[heardFrom]){
+			if(!neighbour[heardFrom]){
 				// a newly connected neighbour
 				// record this neighbour, announce to others
 				neighbour[heardFrom] = 1;
