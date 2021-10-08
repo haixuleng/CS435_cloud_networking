@@ -22,6 +22,13 @@ struct sockaddr_in globalNodeAddrs[256];
 // record neighbour nodes, 1 --> connected, 0 --> not connected
 int neighbour[256] = {0};
 
+// record the cost with neighbours
+int cost[256] = {1};
+
+// a 2D array that stores the connection between nodes
+int network[256][256] = {0};
+
+
 void init_to_x(int* array, int s, int x){
     // initialize an array of size s to value x
     // return: none, update array
@@ -87,7 +94,7 @@ int main(int argc, char** argv)
 	
 	
 	//TODO: read and parse initial costs file. default to cost 1 if no entry for a node. file may be empty.
-	int cost[255] = {1};
+	//int cost[255] = {1};
 	init_to_x(cost, 256, 1); // initialize all to 1 regardless of the cost file, then update it use the cost file
 	read_cost(argv[2], cost);
 

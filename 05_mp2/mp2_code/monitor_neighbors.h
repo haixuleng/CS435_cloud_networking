@@ -23,6 +23,12 @@ extern struct sockaddr_in globalNodeAddrs[256];
 // an array that is used to record neighbours
 extern int neighbour[256];
 
+// an array that stores the cost between current node and the neighbour
+extern int cost[256];
+
+// a 2D array that stores the connection between nodes
+extern int network[256][256];
+
 //Yes, this is terrible. It's also terrible that, in Linux, a socket
 //can't receive broadcast packets unless it's bound to INADDR_ANY,
 //which we can't do in this assignment.
@@ -49,36 +55,63 @@ void* announceToNeighbors(void* unusedParam)
 
 void printNeighbour(){
 	// print the neighbours
-	printf("Neighbour: ");
 	for(int i = 0; i < 256; i++){
 		if(neighbour[i]){
+			printf("n");
 			printf("%d", i);
+			printf("c");
+			printf("%d", cost[i]);
 			printf(" ");
 		}
 	}
 	printf("\n");
 }
 
-void announceChanges(){
+void announceChanges(int n){
+	// input, change to the nth neighbour
 	// the neighbours of current node has changed
 	// need to announce this information to available neighbours
-	printf("Announce changes: not implemented yet");
-
+	// format: change 1 to 2 cn 1 cs 10, 1 to 2 is connected with cost as 10
+	// another example: change 1 to 2 cn 0 cs 10, 1 to 2 is no longer connected
+	char message[256] = "change ";
+	char temp[256];
+	sprintf(temp, "%d", globalMyID);
+	strcat(message, temp);
+	strcat(message, " to ");
+	sprintf(temp, "%d", n);
+	strcat(message, temp);
+	strcat(message, " cn ");
+	sprintf(temp, "%d", neighbour[n]);
+	strcat(message, temp);
+	strcat(message, " cs ");
+	sprintf(temp, "%d", cost[n]);
+	strcat(message, temp);
+	hackyBroadcast(message, strlen(message));
+	printNeighbour();
 }
 
 void checkTimeOut(){
 	// check whether the neighbour has been lost
 	// time interval is 1 s
 	struct timeval current_time;
-	int timeout = 1000000;
+	int timeout = 1;
 	gettimeofday(&current_time, NULL);
 	for(int i = 0; i < 256; i++){
-		int current_us = (current_time.tv_sec % 10) * 1000000 + current_time.tv_usec;
-		int last_connect_us = (globalLastHeartbeat[i].tv_sec % 10) * 1000000 + globalLastHeartbeat[i].tv_usec;
-		if(current_us - last_connect_us > timeout){
+		//int current_us = (current_time.tv_sec % 10) * 1000000 + current_time.tv_usec;
+		//int last_connect_us = (globalLastHeartbeat[i].tv_sec % 10) * 1000000 + globalLastHeartbeat[i].tv_usec;
+		if(!neighbour[i]){
+			// skip non-neighbours
+			continue;
+		}
+		//printf("test check out: %d %d %d\n", current_time.tv_sec, globalLastHeartbeat[i].tv_sec, timeout );
+		if(current_time.tv_sec - globalLastHeartbeat[i].tv_sec  > timeout){
+			printf("%d", i);
+			printf(", timeout\n");
 			neighbour[i] = 0;
-			// also needs to broadcast this 
-			announceChanges();
+			network[globalMyID][i] = 0;
+			network[i][globalMyID] = 0;
+			// also needs to broadcast this
+			announceChanges(i);
 		}
 	}
 }
@@ -89,7 +122,7 @@ void listenForNeighbors()
 	char fromAddr[100];
 	struct sockaddr_in theirAddr;
 	socklen_t theirAddrLen;
-	unsigned char recvBuf[1000];
+	unsigned char recvBuf[1000]={'\0'};
 
 	int bytesRecvd;
 	while(1)
@@ -109,19 +142,20 @@ void listenForNeighbors()
 		{
 			heardFrom = atoi(
 					strchr(strchr(strchr(fromAddr,'.')+1,'.')+1,'.')+1);
-			
 			//TODO: this node can consider heardFrom to be directly connected to it; do any such logic now.
 			if(!neighbour[heardFrom]){
 				// a newly connected neighbour
 				// record this neighbour, announce to others
 				neighbour[heardFrom] = 1;
-				announceChanges();
+				network[globalMyID][heardFrom] = cost[heardFrom];
+				network[heardFrom][globalMyID] = cost[heardFrom];
+				printf("received\n");
+				announceChanges(heardFrom);
 			}
-			printNeighbour();
+			//printNeighbour();
 			//record that we heard from heardFrom just now.
 			gettimeofday(&globalLastHeartbeat[heardFrom], 0);
 		}
-		
 		//Is it a packet from the manager? (see mp2 specification for more details)
 		//send format: 'send'<4 ASCII bytes>, destID<net order 2 byte signed>, <some ASCII message>
 		if(!strncmp(recvBuf, "send", 4))
@@ -140,7 +174,22 @@ void listenForNeighbors()
 		//TODO now check for the various types of packets you use in your own protocol
 		else if(!strncmp(recvBuf, "change", 6))
 		{
-			printf("Connection changed");
+			printf("Connection changed\n");
+			printf("%s\n", recvBuf);
+			char* token = strtok(recvBuf, " ");
+			token = strtok(NULL, " ");
+			int source = atoi(token);
+			token = strtok(NULL, " ");
+			token = strtok(NULL, " ");
+			int destination = atoi(token);
+			token = strtok(NULL, " ");
+                        token = strtok(NULL, " ");
+			int connection = atoi(token);
+			token = strtok(NULL, " ");
+                        token = strtok(NULL, " ");
+			int link_cost = atoi(token);
+			printf("%d %d %d %d\n", source, destination, connection, link_cost);
+
 		}
 
 		checkTimeOut();
