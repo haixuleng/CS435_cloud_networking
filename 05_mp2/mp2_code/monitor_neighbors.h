@@ -34,6 +34,8 @@ extern int cost[256];
 // a 2D array that stores the connection between nodes
 extern int network[256][256];
 
+// an array records the previous node to the destination by the shortest path
+extern int pred[256];
 
 //Yes, this is terrible. It's also terrible that, in Linux, a socket
 //can't receive broadcast packets unless it's bound to INADDR_ANY,
@@ -41,6 +43,7 @@ extern int network[256][256];
 
 void encodeNeighbour(char* message);
 void announceChanges(int n);
+int nextHop(int destination);
 
 void hackyBroadcast(const char* buf, int length)
 {
@@ -94,6 +97,12 @@ void printTopology(){
 			if(network[i][j]){
 				printf("%dn%dc%d ", i, j, network[i][j]);
 			}
+		}
+	}
+	printf("\n");
+	for(int i = 0; i < 256; i++){
+		if(broadcastSequenceFrom[i] > 1){
+			printf("To %d hop to %d\n", i, nextHop(i));
 		}
 	}
 	printf("\n");
@@ -167,7 +176,6 @@ void announceChanges(int n){
 	}
 	encodeNeighbour(message);
 	hackyBroadcast(message, strlen(message));
-	//printf("Message sent: %s, %d %d id: %d\n", message, broadcastSequence, broadcastSequenceFrom[globalMyID], globalMyID);
 }
 
 void checkTimeOut(){
@@ -177,13 +185,10 @@ void checkTimeOut(){
 	int timeout = 1;
 	gettimeofday(&current_time, NULL);
 	for(int i = 0; i < 256; i++){
-		//int current_us = (current_time.tv_sec % 10) * 1000000 + current_time.tv_usec;
-		//int last_connect_us = (globalLastHeartbeat[i].tv_sec % 10) * 1000000 + globalLastHeartbeat[i].tv_usec;
 		if(!neighbour[i]){
 			// skip non-neighbours
 			continue;
 		}
-		//printf("test check out: %d %d %d\n", current_time.tv_sec, globalLastHeartbeat[i].tv_sec, timeout );
 		if(current_time.tv_sec - globalLastHeartbeat[i].tv_sec  > timeout){
 			printf("%d", i);
 			printf(", timeout\n");
@@ -197,6 +202,80 @@ void checkTimeOut(){
 		}
 	}
 }
+
+void dijkstra(){
+	// Dijkstra algorithm
+	// Tie breaking is not implemented yet
+
+	int INFINITY = 9999;
+	int n = 256;
+	int start = globalMyID;
+	int Graph[256][256] = {0};
+	int distance[n];
+	//int pred[n];
+	int visited[n];
+	int count, mindistance, nextnode;
+	// initialize Graph by copying values from network
+	// if network[i][j] = 0, then Graph[i][j] = INFINITY
+	for(int i = 0; i < n; i++){
+		for(int j = 0; j < n; j++){
+			if(network[i][j]){
+				Graph[i][j] = network[i][j];
+			}
+			else{
+				Graph[i][j] = INFINITY;
+			}
+		}
+	}
+	
+	for(int i = 0; i < n; i++){
+		distance[i] = Graph[start][i];
+		pred[i] = start;
+		visited[i] = 0;
+	}
+
+	distance[start] = 0;
+	visited[start] = 1;
+	count = 1;
+
+	while(count < n - 1){
+		// find the minimum distance to extend the frontier
+		// it should be implemented with heap
+		mindistance = INFINITY;
+		for(int i = 0; i < n; i++){
+			if(distance[i] < mindistance && !visited[i]){
+				mindistance = distance[i];
+				nextnode = i;
+			}
+		}
+		// update the map
+		visited[nextnode] = 1;
+		for(int i = 0; i < n; i++){
+			if(!visited[i]){
+				if(mindistance + Graph[nextnode][i] < distance[i]){
+					distance[i] = mindistance + Graph[nextnode][i];
+					pred[i] = nextnode;
+				}
+			}
+		}
+		count ++;
+	}
+}
+
+int nextHop(int destination){
+	// return the next hop for the destination
+	// if a path does not exit, return -1
+	while(pred[destination] != globalMyID){
+		destination = pred[destination];
+	}
+	if(network[globalMyID][destination]){
+		return destination;
+	}
+	else{
+		return -1;
+	}
+}
+
 
 void listenForNeighbors()
 {
@@ -259,15 +338,12 @@ void listenForNeighbors()
 		//TODO now check for the various types of packets you use in your own protocol
 		else if(!strncmp(recvBuf, "broadcast", 6))
 		{
-			//printf("new message received: ");
-			//printNeighbour();
-			//printf("%s\n", recvBuf);
-			char rawRecvBuf[1000];
+			char rawRecvBuf[1000]; // the recvBuf will be modified after parsing
 			strcpy(rawRecvBuf, recvBuf);
 			struct decodedMessage broadcast_message = decode(recvBuf);
 			if(broadcast_message.seq > broadcastSequenceFrom[broadcast_message.from]){
 				// new announcement to me, update my knowledge
-				printf("Seq: %d, %d id: %d\n", broadcast_message.seq, broadcastSequenceFrom[broadcast_message.from], globalMyID);
+				//printf("Seq: %d, %d id: %d\n", broadcast_message.seq, broadcastSequenceFrom[broadcast_message.from], globalMyID);
 				broadcastSequenceFrom[broadcast_message.from] = broadcast_message.seq;
 				// reset the network connected to "from"
 				for(int i = 0; i< 256; i++){
@@ -283,6 +359,7 @@ void listenForNeighbors()
                                 }
 				printf("New message: %s\n", rawRecvBuf);
 				//hackyBroadcast(rawRecvBuf, strlen(rawRecvBuf)); // forward the message to the beighbours
+				dijkstra();
 				printTopology();
 			}
 			hackyBroadcast(rawRecvBuf, strlen(rawRecvBuf));

@@ -35,6 +35,9 @@ int cost[256] = {1};
 // a 2D array that stores the connection between nodes
 int network[256][256] = {0};
 
+// an array records the previous node to the destination by the shortest path
+int pred[256];
+
 void init_to_x(int* array, int s, int x){
     // initialize an array of size s to value x
     // return: none, update array
