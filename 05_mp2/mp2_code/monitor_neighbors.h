@@ -11,6 +11,11 @@
 #include <pthread.h>
 
 extern int globalMyID;
+
+extern int broadcastSequence;
+
+extern int broadcastSequenceFrom[256];
+
 //last time you heard from each node. TODO: you will want to monitor this
 //in order to realize when a neighbor has gotten cut off from you.
 extern struct timeval globalLastHeartbeat[256];
@@ -29,9 +34,14 @@ extern int cost[256];
 // a 2D array that stores the connection between nodes
 extern int network[256][256];
 
+
 //Yes, this is terrible. It's also terrible that, in Linux, a socket
 //can't receive broadcast packets unless it's bound to INADDR_ANY,
 //which we can't do in this assignment.
+
+void encodeNeighbour(char* message);
+void announceChanges(int n);
+
 void hackyBroadcast(const char* buf, int length)
 {
 	int i;
@@ -41,15 +51,25 @@ void hackyBroadcast(const char* buf, int length)
 				  (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
 }
 
+
+
 void* announceToNeighbors(void* unusedParam)
 {
 	struct timespec sleepFor;
+	int count = 1;
+	int refresh_count = 20; // manually do a refresh every 20 announcement
 	sleepFor.tv_sec = 0;
 	sleepFor.tv_nsec = 300 * 1000 * 1000; //300 ms
 	while(1)
 	{
-		hackyBroadcast("HEREIAM", 7);
+		//hackyBroadcast("HEREIAM", 7);
+		if(count > refresh_count){
+			count = 1;
+			broadcastSequence++;
+		}
+		announceChanges(0);
 		nanosleep(&sleepFor, 0);
+		count++;
 	}
 }
 
@@ -67,27 +87,87 @@ void printNeighbour(){
 	printf("\n");
 }
 
-void announceChanges(int n){
-	// input, change to the nth neighbour
-	// the neighbours of current node has changed
-	// need to announce this information to available neighbours
-	// format: change 1 to 2 cn 1 cs 10, 1 to 2 is connected with cost as 10
-	// another example: change 1 to 2 cn 0 cs 10, 1 to 2 is no longer connected
-	char message[256] = "change ";
-	char temp[256];
+void printTopology(){
+	// print the known topology
+	for(int i = 0; i < 255; i++){
+		for(int j = i + 1; j < 256; j++){
+			if(network[i][j]){
+				printf("%dn%dc%d ", i, j, network[i][j]);
+			}
+		}
+	}
+	printf("\n");
+}
+
+void encodeNeighbour(char* message){
+	// encode the current neighbour information into a message
+	// format:
+	// "broadcast 0 1 2 10 3 11"
+	// The first number is the sequence number, the second is the source
+	// the third is the destination, and the cost is the fourth. The fifth is the next desstination, etc
+	// seq 0 cost between 1 and 2 is 10, between 1 and 3 is 11.
+	// If no neigbours stop at from 1
+	// modify the encoded "message"
+	
+	char temp[256] = "\0";
+	sprintf(message, "%s", "broadcast ");
+	sprintf(temp, "%d", broadcastSequence);
+	strcat(message, temp);
+        strcat(message, " ");
 	sprintf(temp, "%d", globalMyID);
 	strcat(message, temp);
-	strcat(message, " to ");
-	sprintf(temp, "%d", n);
-	strcat(message, temp);
-	strcat(message, " cn ");
-	sprintf(temp, "%d", neighbour[n]);
-	strcat(message, temp);
-	strcat(message, " cs ");
-	sprintf(temp, "%d", cost[n]);
-	strcat(message, temp);
+        strcat(message, " ");
+	for(int i = 0; i < 256; i++){
+		if(neighbour[i]){
+			sprintf(temp, "%d", i);
+			strcat(message, temp);
+			strcat(message, " ");
+			sprintf(temp, "%d", cost[i]);
+			strcat(message, temp);
+			strcat(message, " ");
+		}
+	}
+	strcat(message, "\0");
+	//broadcastSequence++; // increment on the sequence
+}
+
+typedef struct decodedMessage{
+	// struct to help decode broadcast message
+	
+	int seq;
+	int from;
+	int fromCost[256]; // the ith element is the cost between "from" and "i"	
+} decodedMessage;
+
+decodedMessage decode(char* message){
+	// decode the broadcast message, return a decodeMessage type
+	decodedMessage a = {0, 0, {0}}; // initialization
+	char* token = strtok(message, " ");
+	token = strtok(NULL, " "); // point at sequence
+	a.seq = atoi(token);
+	token = strtok(NULL, " "); // point at source
+	a.from = atoi(token);
+	// parse cost pairs
+	token = strtok(NULL, " ");
+	while(token != NULL){
+		int to = atoi(token);
+		token = strtok(NULL, " ");
+		a.fromCost[to] = atoi(token);
+		token = strtok(NULL, " ");
+	}
+	return a;
+}
+
+void announceChanges(int n){
+	// send out the broadcast
+	char message[256];
+	if(!broadcastSequenceFrom[globalMyID]){
+		broadcastSequenceFrom[globalMyID] = 1;
+		broadcastSequence = 1;
+	}
+	encodeNeighbour(message);
 	hackyBroadcast(message, strlen(message));
-	printNeighbour();
+	//printf("Message sent: %s, %d %d id: %d\n", message, broadcastSequence, broadcastSequenceFrom[globalMyID], globalMyID);
 }
 
 void checkTimeOut(){
@@ -111,6 +191,8 @@ void checkTimeOut(){
 			network[globalMyID][i] = 0;
 			network[i][globalMyID] = 0;
 			// also needs to broadcast this
+			broadcastSequence++; // increment on the sequence
+			broadcastSequenceFrom[globalMyID] = broadcastSequence;
 			announceChanges(i);
 		}
 	}
@@ -127,6 +209,7 @@ void listenForNeighbors()
 	int bytesRecvd;
 	while(1)
 	{
+		memset(recvBuf, '\0', 1000); // reset memory of recvBuf
 		theirAddrLen = sizeof(theirAddr);
 		if ((bytesRecvd = recvfrom(globalSocketUDP, recvBuf, 1000 , 0, 
 					(struct sockaddr*)&theirAddr, &theirAddrLen)) == -1)
@@ -149,7 +232,9 @@ void listenForNeighbors()
 				neighbour[heardFrom] = 1;
 				network[globalMyID][heardFrom] = cost[heardFrom];
 				network[heardFrom][globalMyID] = cost[heardFrom];
-				printf("received\n");
+				printf("Found new neighbour\n");
+				broadcastSequence++; // increment on the sequence
+				broadcastSequenceFrom[globalMyID] = broadcastSequence;
 				announceChanges(heardFrom);
 			}
 			//printNeighbour();
@@ -172,24 +257,35 @@ void listenForNeighbors()
 		}
 		
 		//TODO now check for the various types of packets you use in your own protocol
-		else if(!strncmp(recvBuf, "change", 6))
+		else if(!strncmp(recvBuf, "broadcast", 6))
 		{
-			printf("Connection changed\n");
-			printf("%s\n", recvBuf);
-			char* token = strtok(recvBuf, " ");
-			token = strtok(NULL, " ");
-			int source = atoi(token);
-			token = strtok(NULL, " ");
-			token = strtok(NULL, " ");
-			int destination = atoi(token);
-			token = strtok(NULL, " ");
-                        token = strtok(NULL, " ");
-			int connection = atoi(token);
-			token = strtok(NULL, " ");
-                        token = strtok(NULL, " ");
-			int link_cost = atoi(token);
-			printf("%d %d %d %d\n", source, destination, connection, link_cost);
-
+			//printf("new message received: ");
+			//printNeighbour();
+			//printf("%s\n", recvBuf);
+			char rawRecvBuf[1000];
+			strcpy(rawRecvBuf, recvBuf);
+			struct decodedMessage broadcast_message = decode(recvBuf);
+			if(broadcast_message.seq > broadcastSequenceFrom[broadcast_message.from]){
+				// new announcement to me, update my knowledge
+				printf("Seq: %d, %d id: %d\n", broadcast_message.seq, broadcastSequenceFrom[broadcast_message.from], globalMyID);
+				broadcastSequenceFrom[broadcast_message.from] = broadcast_message.seq;
+				// reset the network connected to "from"
+				for(int i = 0; i< 256; i++){
+					network[broadcast_message.from][i] = 0;
+					network[i][broadcast_message.from] = 0;
+				}
+				// update the network connected to "from"
+				for(int i = 0; i< 256; i++){
+					if(broadcast_message.fromCost[i]){// if connected
+						network[broadcast_message.from][i] = broadcast_message.fromCost[i];
+						network[i][broadcast_message.from] = broadcast_message.fromCost[i];
+					}
+                                }
+				printf("New message: %s\n", rawRecvBuf);
+				//hackyBroadcast(rawRecvBuf, strlen(rawRecvBuf)); // forward the message to the beighbours
+				printTopology();
+			}
+			hackyBroadcast(rawRecvBuf, strlen(rawRecvBuf));
 		}
 
 		checkTimeOut();

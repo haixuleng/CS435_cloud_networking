@@ -10,6 +10,13 @@ void* announceToNeighbors(void* unusedParam);
 
 
 int globalMyID = 0;
+
+// store the sequence for broadcasting
+int broadcastSequence = 0;
+
+// store the broadcasting sequence from node i
+int broadcastSequenceFrom[256] = {0};
+
 //last time you heard from each node. TODO: you will want to monitor this
 //in order to realize when a neighbor has gotten cut off from you.
 struct timeval globalLastHeartbeat[256];
@@ -27,7 +34,6 @@ int cost[256] = {1};
 
 // a 2D array that stores the connection between nodes
 int network[256][256] = {0};
-
 
 void init_to_x(int* array, int s, int x){
     // initialize an array of size s to value x
