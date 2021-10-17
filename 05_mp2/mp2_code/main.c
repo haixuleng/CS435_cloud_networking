@@ -5,9 +5,9 @@
 #include "monitor_neighbors.h"
 
 
-void listenForNeighbors();
+void listenForNeighbors(char* logFile);
 void* announceToNeighbors(void* unusedParam);
-
+void* forwardToNeighbors(void* unusedParam);
 
 int globalMyID = 0;
 
@@ -132,12 +132,15 @@ int main(int argc, char** argv)
 	//start threads... feel free to add your own, and to remove the provided ones.
 	pthread_t announcerThread;
 	pthread_create(&announcerThread, 0, announceToNeighbors, (void*)0);
-	
-	
+	/*
+	pthread_t forwardThread;
+	pthread_create(&forwardThread, 0, forwardToNeighbors, (void*)0);
+	*/
 	
 	
 	//good luck, have fun!
-	listenForNeighbors();
+	//pass the log file name to the function
+	listenForNeighbors(argv[3]);
 	
 	
 	
