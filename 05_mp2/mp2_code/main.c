@@ -4,10 +4,10 @@
 
 #include "monitor_neighbors.h"
 
-
 void listenForNeighbors(char* logFile);
 void* announceToNeighbors(void* unusedParam);
 void* forwardToNeighbors(void* unusedParam);
+void* broadcastToNeighbors(void* unusedParam);
 
 int globalMyID = 0;
 
@@ -15,28 +15,39 @@ int globalMyID = 0;
 int broadcastSequence = 0;
 
 // store the broadcasting sequence from node i
-int broadcastSequenceFrom[256] = {0};
+int broadcastSequenceFrom[graphSize] = {0};
 
 //last time you heard from each node. TODO: you will want to monitor this
 //in order to realize when a neighbor has gotten cut off from you.
-struct timeval globalLastHeartbeat[256];
+struct timeval globalLastHeartbeat[graphSize];
 
 //our all-purpose UDP socket, to be bound to 10.1.1.globalMyID, port 7777
 int globalSocketUDP;
 //pre-filled for sending to 10.1.1.0 - 255, port 7777
-struct sockaddr_in globalNodeAddrs[256];
+struct sockaddr_in globalNodeAddrs[graphSize];
 
 // record neighbour nodes, 1 --> connected, 0 --> not connected
-int neighbour[256] = {0};
+int neighbour[graphSize] = {0};
 
 // record the cost with neighbours
-int cost[256] = {1};
+int cost[graphSize] = {1};
 
 // a 2D array that stores the connection between nodes
-int network[256][256] = {0};
+int network[graphSize][graphSize] = {0};
 
 // an array records the previous node to the destination by the shortest path
-int pred[256];
+int pred[graphSize];
+
+// set to 1 if we want to forward the announcement
+int forwardFlag;
+int broadcastFlag;
+// stores the message from broadcast
+char announcementBuf[512];
+// used to avoid duplicated broadcast
+int announcementSource;
+int announcementFrom;
+int announcementBufLength;
+extern int dumpReceived;
 
 void init_to_x(int* array, int s, int x){
     // initialize an array of size s to value x
@@ -89,7 +100,7 @@ int main(int argc, char** argv)
 	//and set up our sockaddr_in's for sending to the other nodes.
 	globalMyID = atoi(argv[1]);
 	int i;
-	for(i=0;i<256;i++)
+	for(i=0;i<graphSize;i++)
 	{
 		gettimeofday(&globalLastHeartbeat[i], 0);
 		
@@ -104,7 +115,7 @@ int main(int argc, char** argv)
 	
 	//TODO: read and parse initial costs file. default to cost 1 if no entry for a node. file may be empty.
 	//int cost[255] = {1};
-	init_to_x(cost, 256, 1); // initialize all to 1 regardless of the cost file, then update it use the cost file
+	init_to_x(cost, graphSize, 1); // initialize all to 1 regardless of the cost file, then update it use the cost file
 	read_cost(argv[2], cost);
 
 	
@@ -132,10 +143,14 @@ int main(int argc, char** argv)
 	//start threads... feel free to add your own, and to remove the provided ones.
 	pthread_t announcerThread;
 	pthread_create(&announcerThread, 0, announceToNeighbors, (void*)0);
-	/*
-	pthread_t forwardThread;
-	pthread_create(&forwardThread, 0, forwardToNeighbors, (void*)0);
-	*/
+	
+	pthread_t broadcastThread;
+	pthread_create(&broadcastThread, 0, broadcastToNeighbors, (void*)0);
+	
+
+	//pthread_t forwardThread;
+	//pthread_create(&forwardThread, 0, forwardToNeighbors, (void*)0);
+	
 	
 	
 	//good luck, have fun!

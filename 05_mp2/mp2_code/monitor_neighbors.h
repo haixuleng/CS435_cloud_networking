@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <pthread.h>
+//#include "data_structure.h"
 
 #define graphSize 256
 
@@ -16,43 +17,58 @@ extern int globalMyID;
 
 extern int broadcastSequence;
 
-extern int broadcastSequenceFrom[256];
+extern int broadcastSequenceFrom[graphSize];
 
 //last time you heard from each node. TODO: you will want to monitor this
 //in order to realize when a neighbor has gotten cut off from you.
-extern struct timeval globalLastHeartbeat[256];
+extern struct timeval globalLastHeartbeat[graphSize];
 
 //our all-purpose UDP socket, to be bound to 10.1.1.globalMyID, port 7777
 extern int globalSocketUDP;
 //pre-filled for sending to 10.1.1.0 - 255, port 7777
-extern struct sockaddr_in globalNodeAddrs[256];
+extern struct sockaddr_in globalNodeAddrs[graphSize];
 
 // an array that is used to record neighbours
-extern int neighbour[256];
+extern int neighbour[graphSize];
 
 // an array that stores the cost between current node and the neighbour
-extern int cost[256];
+extern int cost[graphSize];
 
 // a 2D array that stores the connection between nodes
-extern int network[256][256];
+extern int network[graphSize][graphSize];
 
 // an array records the previous node to the destination by the shortest path
-extern int pred[256];
+extern int pred[graphSize];
+
+// set to 1 if we want to forward the announcement
+extern int forwardFlag;
+extern int broadcastFlag;
+// stores the message from broadcast
+extern char announcementBuf[512];
+// used to avoid duplicated broadcast
+extern int announcementSource;
+extern int announcementFrom;
+extern int announcementBufLength;
+
+extern int dumpReceived = 0;
 
 extern int globalSocketUDP;
+
+pthread_mutex_t forwardFlag_m = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t broadcastFlag_m = PTHREAD_MUTEX_INITIALIZER;
 
 //Yes, this is terrible. It's also terrible that, in Linux, a socket
 //can't receive broadcast packets unless it's bound to INADDR_ANY,
 //which we can't do in this assignment.
 
-void encodeNeighbour(char* message);
+int encodeNeighbour(char* message);
 void announceChanges(int n);
 int nextHop(int destination);
 
 void hackyBroadcast(const char* buf, int length)
 {
 	int i;
-	for(i=0;i<256;i++)
+	for(i=0;i<graphSize;i++)
 		if(i != globalMyID) //(although with a real broadcast you would also get the packet yourself)
 			sendto(globalSocketUDP, buf, length, 0,
 				  (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
@@ -61,33 +77,92 @@ void hackyBroadcast(const char* buf, int length)
 void forward(char* buf, int dest, int length){
 	// send message to dest
 	//int length = strlen(buf);
-	sendto(globalSocketUDP, buf, length, 0,
-                                  (struct sockaddr*)&globalNodeAddrs[dest], sizeof(globalNodeAddrs[dest]));
+	if(sendto(globalSocketUDP, buf, length, 0,
+                                  (struct sockaddr*)&globalNodeAddrs[dest], sizeof(globalNodeAddrs[dest]))<0)
+	{
+		printf("Send %d to %d failed %d \n", globalMyID, dest, neighbour[dest]);
+	}
+	else
+	{
+		//printf("Send %d to %d ok \n", globalMyID, dest);
+	}
 }
 
 void* announceToNeighbors(void* unusedParam)
 {
 	struct timespec sleepFor;
 	int count = 1;
-	int refresh_count = 5; // manually do a refresh every 20 announcement
+	int refresh_count = 5; // manually do a refresh every 10 announcement
 	sleepFor.tv_sec = 0;
-	sleepFor.tv_nsec = 100 * 1000 * 1000; //100 ms
+	sleepFor.tv_nsec = 300 * 1000 * 1000; //300 ms
+	hackyBroadcast("HEREIAM", 7); // announcement of a new node
+	nanosleep(&sleepFor, 0);
 	while(1)
 	{
-		//hackyBroadcast("HEREIAM", 7);
-		if(count > refresh_count){
-			count = 1;
-			broadcastSequence++;
-		}
-		announceChanges(0);
+		hackyBroadcast("HELLO", 5);
 		nanosleep(&sleepFor, 0);
-		count++;
+		//count++;
+	}
+}
+
+void* forwardToNeighbors(void* unusedParam)
+{
+	// forward the new message to my neighbors
+	while(1)
+	{
+		if(forwardFlag){
+			//printf("%d forward broadcast from %d\n", globalMyID, announcementFrom);
+			//pthread_mutex_lock(&forwardFlag_m);
+			for(int i = 0; i < graphSize; i++){
+				//if(neighbour[i] && i != announcementFrom && i != announcementSource){
+				if(i != announcementFrom && i != announcementSource){
+					// neighbor and it is not the one that sends the message
+					forward(announcementBuf, i, announcementBufLength);
+					//printf("forward to %d buf len %d, end %s\n", i, announcementBufLength, announcementBuf + announcementBufLength);
+				}
+			}
+			//nanosleep(&sleepFor, 0);
+			forwardFlag = 0;
+			//pthread_mutex_unlock(&forwardFlag_m);
+		}
+		
+	}
+}
+
+void* broadcastToNeighbors(void* unusedParam)
+{
+	// broadcast to my neighbors
+	char message[graphSize] = {"\0"};
+	int length;
+	broadcastFlag = 0;
+	struct timespec sleepFor;
+	sleepFor.tv_sec = 0;
+	sleepFor.tv_nsec = 300 * 1000 * 1000; //300 ms
+	while(1)
+	{
+		if(1){
+			//printf("%d forward broadcast from %d\n", globalMyID, announcementFrom);
+
+			length = encodeNeighbour(message);
+			for(int i = 0; i < graphSize; i++){
+				if(i != globalMyID && neighbour[i]){
+					forward(message, i, length);
+				}
+			}
+			//printf("%d brdc with seq %d\n", globalMyID, broadcastSequence);
+			nanosleep(&sleepFor, 0);
+			pthread_mutex_lock(&broadcastFlag_m);
+			//broadcastFlag = 0;
+			broadcastSequence++;
+			pthread_mutex_unlock(&broadcastFlag_m);
+		}
+		
 	}
 }
 
 void printNeighbour(){
 	// print the neighbours
-	for(int i = 0; i < 256; i++){
+	for(int i = 0; i < graphSize; i++){
 		if(neighbour[i]){
 			printf("n");
 			printf("%d", i);
@@ -101,26 +176,57 @@ void printNeighbour(){
 
 void printTopology(){
 	// print the known topology
+	/*
+	int count = 0;
 	for(int i = 0; i < 255; i++){
 		for(int j = i + 1; j < 256; j++){
 			if(network[i][j]){
-				printf("%dn%dc%d ", i, j, network[i][j]);
+				//printf("%dn%dc%d ", i, j, network[i][j]);
 			}
 		}
 	}
 	printf("\n");
 	for(int i = 0; i < 256; i++){
-		if(broadcastSequenceFrom[i] > 1){
-			printf("To %d hop to %d\n", i, nextHop(i));
+		for(int j = i + 1; j < 256; j++){
+			if(network[i][j]){
+				printf("%d to %d, cost %d\n", i, j, network[i][j]);
+			}
 		}
+	}
+	printf("%d has connection to %d nodes \n", globalMyID, count);
+	*/
+	int n = 3;
+	int x, y;
+	for(int i = 0; i < n * n; i++){
+		x = i;//i / n * 10 + i % n;
+		for(int j = 0; j < n * n; j++){
+			y = j;//j / n * 10 + j % n;
+			if(network[x][y]){
+				printf("1 ");
+			}
+			else{
+				printf("- ");
+			}
+		}
+		printf("\n");
 	}
 	printf("\n");
 }
 
-void encodeNeighbour(char* message){
+typedef struct decodedMessage{
+	// struct to help decode broadcast message
+	int seq;
+	int from;
+	int fromCost[graphSize]; // the ith element is the cost between "from" and "i"
+	int length; // length of the message	
+} decodedMessage;
+
+decodedMessage decode(char* message);
+
+int encodeNeighbour(char* message){
 	// encode the current neighbour information into a message
 	// format:
-	// "broadcast 0 1 2 10 3 11"
+	// "brdc 0 1 2 10 3 11 *"
 	// The first number is the sequence number, the second is the source
 	// the third is the destination, and the cost is the fourth. The fifth is the next desstination, etc
 	// seq 0 cost between 1 and 2 is 10, between 1 and 3 is 11.
@@ -128,93 +234,96 @@ void encodeNeighbour(char* message){
 	// modify the encoded "message"
      
 
-	char temp[256] = "\0";
-	sprintf(message, "%s", "broadcast ");
-	sprintf(temp, "%d", broadcastSequence);
-	strcat(message, temp);
-        strcat(message, " ");
-	sprintf(temp, "%d", globalMyID);
-	strcat(message, temp);
-        strcat(message, " ");
-
-	for(int i = 0; i < 256; i++){
+	strcpy(message, "brdc");
+	short int temp = htons((short int) broadcastSequence);
+	memcpy(message + 4, &temp, sizeof(short int));
+	temp = htons((short int) globalMyID);
+	memcpy(message + 4 + sizeof(short int), &temp, sizeof(short int));
+	int count = 2;
+	for(short int i = 0; i < graphSize; i++){
 		if(neighbour[i]){
-			sprintf(temp, "%d", i);
-			strcat(message, temp);
-			strcat(message, " ");
-			sprintf(temp, "%d", cost[i]);
-			strcat(message, temp);
-			strcat(message, " ");
-
+			temp = htons((short int) i);
+			memcpy(message + 4 + sizeof(short int) * count, &temp, sizeof(short int));
+			count++;
+			temp = htons((short int) cost[i]);
+			memcpy(message + 4 + sizeof(short int) * count, &temp, sizeof(short int));
+			count++;
 		}
 	}
-
-	strcat(message, "\0");
+	char end[2] = "*";
+	memcpy(message + 4 + sizeof(short int) * count, end, 1);
+	return 4 + count * sizeof(short int) + 1;
 	//broadcastSequence++; // increment on the sequence
 }
 
-typedef struct decodedMessage{
-	// struct to help decode broadcast message
-	
-	int seq;
-	int from;
-	int fromCost[256]; // the ith element is the cost between "from" and "i"	
-} decodedMessage;
-
 decodedMessage decode(char* message){
 	// decode the broadcast message, return a decodeMessage type
-	decodedMessage a = {0, 0, {0}}; // initialization
-	char* token = strtok(message, " ");
-	token = strtok(NULL, " "); // point at sequence
-	a.seq = atoi(token);
-	token = strtok(NULL, " "); // point at source
-	a.from = atoi(token);
+	decodedMessage a = {0, 0, {0}, 0}; // initialization
+
+
+	short int seq;
+	memcpy(&seq, message+4, sizeof(short int));
+	a.seq = ntohs(seq);
+	memcpy(&seq, message+4+sizeof(short int), sizeof(short int));
+	a.from = ntohs(seq);
 	// parse cost pairs
-	token = strtok(NULL, " ");
-	while(token != NULL){
-		int to = atoi(token);
-		token = strtok(NULL, " ");
-		a.fromCost[to] = atoi(token);
-		token = strtok(NULL, " ");
+	//printf("seq %d, from %d\n", a.seq, a.from);
+	int i = 2;
+	//printf("next %s\n", message + 4 + sizeof(short int) * i);
+	//printf("test %d\n", strncmp(message + 4 + sizeof(short int) * i, "*", 1));
+	while(1){
+		if(!strncmp(message + 4 + sizeof(short int) * i, "*", 1)){
+			//printf("find *\n");
+			break; // end reached
+		}
+		else{
+			memcpy(&seq, message+4+sizeof(short int)*i, sizeof(short int));
+			short int to = ntohs(seq);
+			i++;
+			memcpy(&seq, message+4+sizeof(short int)*i, sizeof(short int));
+			i++;
+			a.fromCost[to] = ntohs(seq);
+		}
 	}
+	a.length = 4 + sizeof(short int) * i + 1;
 	return a;
 }
+
 
 typedef struct sendMessage{
 	// parse the "send" message from the manager
 	int destination;
 	int nextDestination;
-	char message[256];
+	char message[graphSize];
 } sendMessage;
 
 sendMessage parseSendMessage(char* message){
 	// parse the send message from the manager
 	// for example, send4hello
-	printf("in parseSendMessage\n");
+	//printf("in parseSendMessage\n");
 	sendMessage a = {0, 0, "\0"};
 	short int no_destID;
 	memcpy(&no_destID, message+4, sizeof(short int));
 	short int dest;
 	dest = ntohs(no_destID);
 	a.destination = dest;
-	printf("dest: %d\n", dest);
+	//printf("dest: %d\n", dest);
 	char* token = message + 4 + sizeof(short int);
 	strcpy(a.message, token);
-	printf("msg: %s\n", a.message);
+	//printf("msg: %s\n", a.message);
 	a.nextDestination = nextHop(a.destination);
 	return a;
 }
 
 void announceChanges(int n){
 	// send out the broadcast
-	char message[256]="broadcast 1 2 3 54 5 10 6 11";
+	char message[graphSize] = {"\0"};
 	if(!broadcastSequenceFrom[globalMyID]){
 		broadcastSequenceFrom[globalMyID] = 1;
 		broadcastSequence = 1;
 	}
-	encodeNeighbour(message);
-	hackyBroadcast(message, strlen(message));
-
+	int length = encodeNeighbour(message);
+	hackyBroadcast(message, length);
 }
 
 
@@ -222,9 +331,9 @@ void checkTimeOut(){
 	// check whether the neighbour has been lost
 	// time interval is 1 s
 	struct timeval current_time;
-	int timeout = 1;
+	int timeout = 2;
 	gettimeofday(&current_time, NULL);
-	for(int i = 0; i < 256; i++){
+	for(int i = 0; i < graphSize; i++){
 		if(!neighbour[i]){
 			// skip non-neighbours
 			continue;
@@ -245,10 +354,10 @@ void checkTimeOut(){
 
 void dijkstra(int print){
 	// Dijkstra algorithm
-	// Tie breaking is not implemented yet
+	// Tie breaking is implemented
 
 	int INFINITY = 9999;
-	int n = 256;
+	int n = graphSize;
 	int start = globalMyID;
 	int Graph[graphSize][graphSize] = {0};
 	int distance[n];
@@ -257,7 +366,7 @@ void dijkstra(int print){
 	int count, mindistance, nextnode;
 	// this array is used to break ties, it stores the first hop for this path.
 	// we alwayse choose the small firstHop value patch if the path length is the same
-	int firstHop[256] = {0}; 
+	int firstHop[graphSize] = {0}; 
 	// initialize Graph by copying values from network
 	// if network[i][j] = 0, then Graph[i][j] = INFINITY
 	for(int i = 0; i < n; i++){
@@ -297,9 +406,9 @@ void dijkstra(int print){
 				nextnode = i;
 			}
 		}
-		if(print){
-			printf("count %d, choose %d, min_d %d, 1st_hop %d\n", count, nextnode, mindistance, firstHop[nextnode]);
-		}
+		//if(print){
+		//	printf("count %d, choose %d, min_d %d, 1st_hop %d\n", count, nextnode, mindistance, firstHop[nextnode]);
+		//}
 		// update the map
 		visited[nextnode] = 1;
 		for(int i = 0; i < n; i++){
@@ -309,9 +418,6 @@ void dijkstra(int print){
 					distance[i] = mindistance + Graph[nextnode][i];
 					pred[i] = nextnode;
 					firstHop[i] = firstHop[nextnode]; // share the same first hop
-					if(print){
-						printf("upd %d, from %d, hop %d\n", i, nextnode, firstHop[i]);
-					}
 				}
 			}
 		}
@@ -322,7 +428,7 @@ void dijkstra(int print){
 int nextHop(int destination){
 	// return the next hop for the destination
 	// if a path does not exit, return -1
-	for(int i = 0; i < 256; i++){
+	for(int i = 0; i < graphSize; i++){
 		if(pred[destination] != globalMyID){
 			destination = pred[destination];
 		}
@@ -338,24 +444,83 @@ int nextHop(int destination){
 	}
 }
 
-void forwardBroadcast(char* buf, int fromNode, int source){
+void forwardBroadcast(char* buf, int fromNode, int source, int length){
 	// forward the broadcast message to the rest of my neighbors
 	// arguments, buffer, the node that send me the message, the original node that send the message
 	
-	for(int i = 0; i < 256; i++){
+	for(int i = 0; i < graphSize; i++){
 		if(neighbour[i] && i != fromNode && i != source){
 			// neighbor and it is not the one that sends the message
-			forward(buf, i, strlen(buf));
+			forward(buf, i, length);
 		}
 	}
 
+}
+
+int packNetwork(char* message){
+	// input: an initialized char pointer to store the network information
+	// return: the length of the buf
+	int shortIntCount = 0;
+	//printf("%d dumps\n", globalMyID);
+	strcpy(message, "dump");
+	for(int i = 0; i < graphSize; i++){
+		for(int j = i + 1; j < graphSize; j++){
+			short int temp;
+			if(network[i][j]){
+				temp = htons((short int) i);
+				memcpy(message + 4 + shortIntCount * sizeof(short int), &temp, sizeof(short int)); //insert i
+				shortIntCount++;
+				temp = htons((short int) j);
+				memcpy(message + 4 + shortIntCount * sizeof(short int), &temp, sizeof(short int)); //insert j
+				shortIntCount++;
+				temp = htons((short int) network[i][j]);
+				memcpy(message + 4 + shortIntCount * sizeof(short int), &temp, sizeof(short int)); //insert j
+				shortIntCount++;
+				//printf("%d to %d cost %d\n", i, j, network[i][j]);
+			}
+		}
+	}
+	char end[2] = "*"; // end with *
+	memcpy(message + 4 + shortIntCount * sizeof(short int), end, 1);
+	return 4 + shortIntCount * sizeof(short int) + 1;
+}
+
+void updateNetworkFromDump(char* message){
+	// update the network based on the information received from the neighbor's dump
+	int i = 0;
+	short int seq;
+	short int from;
+	short int to;
+	short int cost;
+	//printf("%d received dump\n", globalMyID);
+	//printf("%s\n", message);
+	while(1){
+		if(!strncmp(message + 4 + sizeof(short int) * i, "*", 1)){
+			//printf("find *\n");
+			break; // end reached
+		}
+		else{ // update network
+			memcpy(&seq, message + 4 + sizeof(short int) * i, sizeof(short int));
+			from = ntohs(seq);
+			i++;
+			memcpy(&seq, message + 4 + sizeof(short int) * i, sizeof(short int));
+			to = ntohs(seq);
+			i++;
+			memcpy(&seq, message + 4 + sizeof(short int) * i, sizeof(short int));
+			i++;
+			cost = ntohs(seq);
+			network[from][to] = cost;
+			network[to][from] = cost;
+			//printf("%d to %d cost %d\n", from, to, cost);
+		}
+	}
 }
 
 void listenForNeighbors(char* logFile)
 {
 	FILE *fp;
 	fp = fopen(logFile, "w");
-	printf("listen...\n");
+	//printf("listen...\n");
 	char fromAddr[100];
 	struct sockaddr_in theirAddr;
 	socklen_t theirAddrLen;
@@ -364,6 +529,9 @@ void listenForNeighbors(char* logFile)
 	int bytesRecvd;
 	while(1)
 	{
+		struct timeval run_time;
+		int t, t1;
+		
 		memset(recvBuf, '\0', 1000); // reset memory of recvBuf
 		theirAddrLen = sizeof(theirAddr);
 		if ((bytesRecvd = recvfrom(globalSocketUDP, recvBuf, 1000 , 0, 
@@ -391,6 +559,7 @@ void listenForNeighbors(char* logFile)
 				//printf("Found new neighbour\n");
 				broadcastSequence++; // increment on the sequence
 				broadcastSequenceFrom[globalMyID] = broadcastSequence;
+				//broadcastFlag = 1;
 				//announceChanges(heardFrom);
 			}
 			//printNeighbour();
@@ -404,29 +573,74 @@ void listenForNeighbors(char* logFile)
 			//TODO send the requested message to the requested destination node
 			// ...
 			//dijkstra(1); // for debug use only
+			//gettimeofday(&run_time, 0);
+			//t = run_time.tv_sec * 1000000 + run_time.tv_usec ;
+			dijkstra(0);
+			//gettimeofday(&run_time, 0);
+			//t1 = run_time.tv_sec * 1000000 + run_time.tv_usec;
+			//printf("dijkstra used %d us\n", t1-t);
 			char rawBuf[512] = {"\0"}; 
 			char logLine[512] = {"\0"};
-			printf("Received: %s\n", recvBuf);
+			//printf("%d received from %d\n", globalMyID, heardFrom);
 			strcpy(rawBuf, recvBuf);
+			//gettimeofday(&run_time, 0);
+			//t = run_time.tv_sec * 1000000 + run_time.tv_usec;
 			sendMessage m = parseSendMessage(recvBuf);
-			printf("Heard from: %d\n", heardFrom);
+			//gettimeofday(&run_time, 0);
+			//t1 = run_time.tv_sec * 1000000 + run_time.tv_usec;
+			//printf("parse used %d us\n", t1-t);
+			//printf("Heard from: %d\n", heardFrom);
 			if(heardFrom < 0){// message from the manager
 				sprintf(logLine, "sending packet dest %d nexthop %d message %s\n", m.destination, m.nextDestination, m.message);
-				printf("forward message: %s to next hop: %d\n", rawBuf, m.nextDestination);
+				printf("%d sending packet dest %d nexthop %d message %s\n", globalMyID, m.destination, m.nextDestination, m.message);
+				//gettimeofday(&run_time, 0);
+				//t = run_time.tv_sec * 1000000 + run_time.tv_usec;			
 				forward(recvBuf, m.nextDestination, 4 + sizeof(short int) + strlen(m.message));
+				//gettimeofday(&run_time, 0);
+				//t1 = run_time.tv_sec * 1000000 + run_time.tv_usec;
+				//printf("forward used %d us\n", t1-t);
 			}
 			else if(m.destination == globalMyID){
 				sprintf(logLine, "receive packet message %s\n", m.message);
+				printf("%d receive packet message %s\n", globalMyID, m.message);
 			}
 			else if(m.nextDestination == -1){
 				sprintf(logLine, "unreachable dest %d\n", m.destination);
+				printf("%d unreachable dest %d\n", globalMyID, m.destination);
 			}
 			else{
 				sprintf(logLine, "forward packet dest %d nexthop %d message %s\n", m.destination, m.nextDestination, m.message);
+				printf("%d forward packet dest %d nexthop %d message %s\n", globalMyID, m.destination, m.nextDestination, m.message);
+				/*char networkBuf[512] = {"\0"};
+				int length = packNetwork(networkBuf); // pack the network information into networkBuf
+				forward(networkBuf, m.nextDestination, length);*/
 				forward(recvBuf, m.nextDestination, 4 + sizeof(short int) + strlen(m.message));
 			}	
+			
+
+			int n = 3;
+			int x, y;
+			/*for(int i = 0; i < n * n; i++){
+				x = i;//i / n * 10 + i % n;
+				for(int j = 0; j < n * n; j++){
+					y = j;//j / n * 10 + j % n;
+					if(network[x][y]>0){
+						strcat(logLine, "1 ");
+						//sprintf(logLine, "1 ");
+					}
+					else{
+						strcat(logLine, "- ");
+						//printf(logLine, "- ");
+					}
+				}
+				strcat(logLine, "\n");
+				//printf(logLine, "\n");
+			}*/
+
 			fprintf(fp, "%s", logLine);
 			fflush(fp);
+			
+			//
 		}
 		//'cost'<4 ASCII bytes>, destID<net order 2 byte signed> newCost<net order 4 byte signed>
 		else if(!strncmp(recvBuf, "cost", 4))
@@ -437,38 +651,67 @@ void listenForNeighbors(char* logFile)
 		}
 		
 		//TODO now check for the various types of packets you use in your own protocol
-		else if(!strncmp(recvBuf, "broadcast", 6))
+		else if(!strncmp(recvBuf, "brdc", 4))
 		{
-			char rawRecvBuf[1000]; // the recvBuf will be modified after parsing
-			strcpy(rawRecvBuf, recvBuf);
+			// receive broadcast from another node
+			pthread_mutex_lock(&forwardFlag_m);
 			struct decodedMessage broadcast_message = decode(recvBuf);
+			//printf("%d recv brdc from %d with seq %d\n", globalMyID, broadcast_message.from, broadcast_message.seq);
 			if(broadcast_message.seq > broadcastSequenceFrom[broadcast_message.from]){
 				// new announcement to me, update my knowledge
-				//printf("Seq: %d, %d id: %d\n", broadcast_message.seq, broadcastSequenceFrom[broadcast_message.from], globalMyID);
 				broadcastSequenceFrom[broadcast_message.from] = broadcast_message.seq;
-				// reset the network connected to "from"
-				for(int i = 0; i< 256; i++){
-					network[broadcast_message.from][i] = 0;
-					network[i][broadcast_message.from] = 0;
-				}
 				// update the network connected to "from"
-				for(int i = 0; i< 256; i++){
-					if(broadcast_message.fromCost[i]){// if connected
-						network[broadcast_message.from][i] = broadcast_message.fromCost[i];
-						network[i][broadcast_message.from] = broadcast_message.fromCost[i];
+				for(int i = 0; i< graphSize; i++){
+					int fromCost = broadcast_message.fromCost[i];
+					if(fromCost>0){//broadcast_message.fromCost[i]){// if connected
+						network[broadcast_message.from][i] = fromCost;//broadcast_message.fromCost[i];
+						network[i][broadcast_message.from] = fromCost;//broadcast_message.fromCost[i];
 					}
-                                }
-				//printf("New message: %s\n", rawRecvBuf);
-				//hackyBroadcast(rawRecvBuf, strlen(rawRecvBuf)); // forward the message to the beighbours
-				dijkstra(0);
+                }
+				announcementFrom = heardFrom;
+				announcementSource = broadcast_message.from;
+				announcementBufLength = broadcast_message.length;
+				memcpy(announcementBuf, recvBuf, announcementBufLength);
+				//Henan //forwardFlag = 1; // forward the announcement
 				//printTopology();
-				forwardBroadcast(rawRecvBuf, heardFrom, broadcast_message.from);
+				forwardBroadcast(announcementBuf, heardFrom, broadcast_message.from, announcementBufLength);
 			}
+			pthread_mutex_unlock(&forwardFlag_m);
 			// forward the broadcast
 			//forwardBroadcast(rawRecvBuf, heardFrom, broadcast_message.from);
 			//hackyBroadcast(rawRecvBuf, strlen(rawRecvBuf));
 		}
-		checkTimeOut();
+		else if(!strncmp(recvBuf, "HEREIAM", 7)){
+			// found a new node, dump my information to it
+			// send out what I know from network[i][j]
+			
+			char networkBuf[512] = {"\0"};
+			//gettimeofday(&run_time, 0);
+			//t = run_time.tv_sec * 1000000 + run_time.tv_usec;
+			int length = packNetwork(networkBuf); // pack the network information into networkBuf
+			//gettimeofday(&run_time, 0);
+			//t1 = run_time.tv_sec * 1000000 + run_time.tv_usec;
+			//printf("dump pack used %d us\n", t1-t);
+			//gettimeofday(&run_time, 0);
+			//t = run_time.tv_sec * 1000000 + run_time.tv_usec;
+			forward(networkBuf, heardFrom, length);
+			//gettimeofday(&run_time, 0);
+			//t1 = run_time.tv_sec * 1000000 + run_time.tv_usec;
+			//printf("forward dump used %d us\n", t1-t);
+		}
+		else if(!strncmp(recvBuf, "dump", 4) && !dumpReceived){
+			// received dump message from the neighbor, update my network
+			
+			//printf("%d recv dmp from %d\n", globalMyID, heardFrom);
+			//gettimeofday(&run_time, 0);
+			//t = run_time.tv_sec * 1000000 + run_time.tv_usec;
+			updateNetworkFromDump(recvBuf);
+			//gettimeofday(&run_time, 0);
+			//t1 = run_time.tv_sec * 1000000 + run_time.tv_usec;
+			//printf("update dump used %d us\n", t1-t);
+			dumpReceived = 1;
+		}
+		//checkTimeOut();
 		// ... 
 	}
 	//(should never reach here)
