@@ -9,7 +9,6 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <pthread.h>
-//#include "data_structure.h"
 
 #define graphSize 256
 
@@ -76,58 +75,28 @@ void hackyBroadcast(const char* buf, int length)
 
 void forward(char* buf, int dest, int length){
 	// send message to dest
-	//int length = strlen(buf);
 	if(sendto(globalSocketUDP, buf, length, 0,
                                   (struct sockaddr*)&globalNodeAddrs[dest], sizeof(globalNodeAddrs[dest]))<0)
 	{
 		printf("Send %d to %d failed %d \n", globalMyID, dest, neighbour[dest]);
 	}
-	else
-	{
-		//printf("Send %d to %d ok \n", globalMyID, dest);
-	}
+	
 }
 
 void* announceToNeighbors(void* unusedParam)
 {
 	struct timespec sleepFor;
-	int count = 1;
-	int refresh_count = 5; // manually do a refresh every 10 announcement
 	sleepFor.tv_sec = 0;
 	sleepFor.tv_nsec = 300 * 1000 * 1000; //300 ms
-	hackyBroadcast("HEREIAM", 7); // announcement of a new node
+	hackyBroadcast("HEREIAM", 7); // announcement of a new node, dump will be activated if received
 	nanosleep(&sleepFor, 0);
 	while(1)
 	{
 		hackyBroadcast("HELLO", 5);
 		nanosleep(&sleepFor, 0);
-		//count++;
 	}
 }
 
-void* forwardToNeighbors(void* unusedParam)
-{
-	// forward the new message to my neighbors
-	while(1)
-	{
-		if(forwardFlag){
-			//printf("%d forward broadcast from %d\n", globalMyID, announcementFrom);
-			//pthread_mutex_lock(&forwardFlag_m);
-			for(int i = 0; i < graphSize; i++){
-				//if(neighbour[i] && i != announcementFrom && i != announcementSource){
-				if(i != announcementFrom && i != announcementSource){
-					// neighbor and it is not the one that sends the message
-					forward(announcementBuf, i, announcementBufLength);
-					//printf("forward to %d buf len %d, end %s\n", i, announcementBufLength, announcementBuf + announcementBufLength);
-				}
-			}
-			//nanosleep(&sleepFor, 0);
-			forwardFlag = 0;
-			//pthread_mutex_unlock(&forwardFlag_m);
-		}
-		
-	}
-}
 
 void* broadcastToNeighbors(void* unusedParam)
 {
@@ -559,10 +528,7 @@ void listenForNeighbors(char* logFile)
 				//printf("Found new neighbour\n");
 				broadcastSequence++; // increment on the sequence
 				broadcastSequenceFrom[globalMyID] = broadcastSequence;
-				//broadcastFlag = 1;
-				//announceChanges(heardFrom);
 			}
-			//printNeighbour();
 			//record that we heard from heardFrom just now.
 			gettimeofday(&globalLastHeartbeat[heardFrom], 0);
 		}
@@ -572,33 +538,16 @@ void listenForNeighbors(char* logFile)
 		{
 			//TODO send the requested message to the requested destination node
 			// ...
-			//dijkstra(1); // for debug use only
-			//gettimeofday(&run_time, 0);
-			//t = run_time.tv_sec * 1000000 + run_time.tv_usec ;
 			dijkstra(0);
-			//gettimeofday(&run_time, 0);
-			//t1 = run_time.tv_sec * 1000000 + run_time.tv_usec;
-			//printf("dijkstra used %d us\n", t1-t);
 			char rawBuf[512] = {"\0"}; 
 			char logLine[512] = {"\0"};
 			//printf("%d received from %d\n", globalMyID, heardFrom);
 			strcpy(rawBuf, recvBuf);
-			//gettimeofday(&run_time, 0);
-			//t = run_time.tv_sec * 1000000 + run_time.tv_usec;
 			sendMessage m = parseSendMessage(recvBuf);
-			//gettimeofday(&run_time, 0);
-			//t1 = run_time.tv_sec * 1000000 + run_time.tv_usec;
-			//printf("parse used %d us\n", t1-t);
-			//printf("Heard from: %d\n", heardFrom);
 			if(heardFrom < 0){// message from the manager
 				sprintf(logLine, "sending packet dest %d nexthop %d message %s\n", m.destination, m.nextDestination, m.message);
-				printf("%d sending packet dest %d nexthop %d message %s\n", globalMyID, m.destination, m.nextDestination, m.message);
-				//gettimeofday(&run_time, 0);
-				//t = run_time.tv_sec * 1000000 + run_time.tv_usec;			
+				printf("%d sending packet dest %d nexthop %d message %s\n", globalMyID, m.destination, m.nextDestination, m.message);	
 				forward(recvBuf, m.nextDestination, 4 + sizeof(short int) + strlen(m.message));
-				//gettimeofday(&run_time, 0);
-				//t1 = run_time.tv_sec * 1000000 + run_time.tv_usec;
-				//printf("forward used %d us\n", t1-t);
 			}
 			else if(m.destination == globalMyID){
 				sprintf(logLine, "receive packet message %s\n", m.message);
@@ -617,26 +566,6 @@ void listenForNeighbors(char* logFile)
 				forward(recvBuf, m.nextDestination, 4 + sizeof(short int) + strlen(m.message));
 			}	
 			
-
-			int n = 3;
-			int x, y;
-			/*for(int i = 0; i < n * n; i++){
-				x = i;//i / n * 10 + i % n;
-				for(int j = 0; j < n * n; j++){
-					y = j;//j / n * 10 + j % n;
-					if(network[x][y]>0){
-						strcat(logLine, "1 ");
-						//sprintf(logLine, "1 ");
-					}
-					else{
-						strcat(logLine, "- ");
-						//printf(logLine, "- ");
-					}
-				}
-				strcat(logLine, "\n");
-				//printf(logLine, "\n");
-			}*/
-
 			fprintf(fp, "%s", logLine);
 			fflush(fp);
 			
@@ -656,7 +585,6 @@ void listenForNeighbors(char* logFile)
 			// receive broadcast from another node
 			pthread_mutex_lock(&forwardFlag_m);
 			struct decodedMessage broadcast_message = decode(recvBuf);
-			//printf("%d recv brdc from %d with seq %d\n", globalMyID, broadcast_message.from, broadcast_message.seq);
 			if(broadcast_message.seq > broadcastSequenceFrom[broadcast_message.from]){
 				// new announcement to me, update my knowledge
 				broadcastSequenceFrom[broadcast_message.from] = broadcast_message.seq;
@@ -668,47 +596,21 @@ void listenForNeighbors(char* logFile)
 						network[i][broadcast_message.from] = fromCost;//broadcast_message.fromCost[i];
 					}
                 }
-				announcementFrom = heardFrom;
-				announcementSource = broadcast_message.from;
-				announcementBufLength = broadcast_message.length;
-				memcpy(announcementBuf, recvBuf, announcementBufLength);
-				//Henan //forwardFlag = 1; // forward the announcement
-				//printTopology();
-				forwardBroadcast(announcementBuf, heardFrom, broadcast_message.from, announcementBufLength);
+				forwardBroadcast(recvBuf, heardFrom, broadcast_message.from, broadcast_message.length);
 			}
 			pthread_mutex_unlock(&forwardFlag_m);
-			// forward the broadcast
-			//forwardBroadcast(rawRecvBuf, heardFrom, broadcast_message.from);
-			//hackyBroadcast(rawRecvBuf, strlen(rawRecvBuf));
 		}
 		else if(!strncmp(recvBuf, "HEREIAM", 7)){
 			// found a new node, dump my information to it
 			// send out what I know from network[i][j]
 			
 			char networkBuf[512] = {"\0"};
-			//gettimeofday(&run_time, 0);
-			//t = run_time.tv_sec * 1000000 + run_time.tv_usec;
 			int length = packNetwork(networkBuf); // pack the network information into networkBuf
-			//gettimeofday(&run_time, 0);
-			//t1 = run_time.tv_sec * 1000000 + run_time.tv_usec;
-			//printf("dump pack used %d us\n", t1-t);
-			//gettimeofday(&run_time, 0);
-			//t = run_time.tv_sec * 1000000 + run_time.tv_usec;
 			forward(networkBuf, heardFrom, length);
-			//gettimeofday(&run_time, 0);
-			//t1 = run_time.tv_sec * 1000000 + run_time.tv_usec;
-			//printf("forward dump used %d us\n", t1-t);
 		}
 		else if(!strncmp(recvBuf, "dump", 4) && !dumpReceived){
 			// received dump message from the neighbor, update my network
-			
-			//printf("%d recv dmp from %d\n", globalMyID, heardFrom);
-			//gettimeofday(&run_time, 0);
-			//t = run_time.tv_sec * 1000000 + run_time.tv_usec;
 			updateNetworkFromDump(recvBuf);
-			//gettimeofday(&run_time, 0);
-			//t1 = run_time.tv_sec * 1000000 + run_time.tv_usec;
-			//printf("update dump used %d us\n", t1-t);
 			dumpReceived = 1;
 		}
 		//checkTimeOut();
