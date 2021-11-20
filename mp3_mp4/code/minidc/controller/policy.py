@@ -160,7 +160,6 @@ class StaticPolicy(object):
                     'priority' : 2,
                     'type' : 'dst'
                 })
-
         # ASSIGNMENT 3:
         # Rules to Install:
         #   On the Edge Switches: output the appropriate port if the destination
@@ -173,6 +172,25 @@ class StaticPolicy(object):
         #   (Hint: to find a the VLAN, use topo.getVlanCore(vlanId))
 
         # [ADD YOUR CODE HERE]
+        for edge in topo.edgeSwitches.values():
+            routingTable[edge.dpid] = []
+            for h in topo.hosts.values():
+                # don't send edge switch's neighbors up to core
+                if h.name in edge.neighbors:
+                    outport = topo.ports[edge.name][h.name]
+                else:
+                    vlanID = h.vlans[0] # only pick the first vlans
+                    print(vlanID)
+                    core = topo.getVlanCore(vlanID)
+                    print(core)
+                    outport = topo.ports[edge.name][core]
+                
+                routingTable[edge.dpid].append({
+                    'eth_dst' : h.eth,
+                    'output' : [outport],
+                    'priority' : 2,
+                    'type' : 'dst'
+                })
 
         return flood.add_arpflood(routingTable, topo)
 
@@ -198,7 +216,6 @@ class DefaultPolicy(object):
                 'priority' : 2,
                 'type' : 'dst'
             })
-
         # create rules for packets from edge -> core (upward)
         for edge in topo.edgeSwitches.values():
             routingTable[edge.dpid] = []
@@ -215,7 +232,6 @@ class DefaultPolicy(object):
                     'priority' : 2,
                     'type' : 'dst'
                 })
-
         return flood.add_arpflood(routingTable, topo)
 
 if __name__ == "__main__":

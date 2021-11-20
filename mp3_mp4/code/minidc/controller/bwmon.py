@@ -149,8 +149,8 @@ class BandwidthMonitor(app_manager.RyuApp):
         for stat in body:
             if stat.port_no in self.topo.ports[name].keys(): # non-virtual ports
                 hostname = self.topo.ports[name][stat.port_no]
-                if name in self.topo.edgeSwitches.keys() and hostname not in self.topo.coreSwitches.keys(): # edge switch
-                    print(name, hostname, stat.tx_bytes, stat.rx_bytes)
+                if name in self.topo.edgeSwitches.keys() and hostname not in self.topo.coreSwitches.keys(): 
+                    # edge switch and the host is a host (not core switch)
                     self.bwstats.addHostBwStat(hostname, stat.tx_bytes, stat.rx_bytes)
 
         # periodically print tenant bandwidth usage
