@@ -80,7 +80,14 @@ class AdaptivePolicy(object):
         # to find the least utilized switch.
 
         # [REPLACE WITH YOUR CODE]
-        return self.utilization.keys()[0]
+        # print(self.utilization)
+        min_core = self.utilization.keys()[0]
+        utilization = self.utilization[min_core]
+        for core in self.utilization.keys():
+            if self.utilization[core] < utilization:
+                min_core = core
+                utilization = self.utilization[core] 
+        return min_core
 
     def redistribute(self):
         # we're installing flows by destination, so sort by received
@@ -180,9 +187,7 @@ class StaticPolicy(object):
                     outport = topo.ports[edge.name][h.name]
                 else:
                     vlanID = h.vlans[0] # only pick the first vlans
-                    print(vlanID)
                     core = topo.getVlanCore(vlanID)
-                    print(core)
                     outport = topo.ports[edge.name][core]
                 
                 routingTable[edge.dpid].append({
